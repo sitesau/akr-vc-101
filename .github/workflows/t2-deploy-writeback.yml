@@ -231,6 +231,7 @@ jobs:
         if: steps.meta.outputs.present == 'true' && steps.meta.outputs.cloud_host == 'render'
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_OWNER_ID: ${{ secrets.RENDER_OWNER_ID }}
         run: |
           [ -n "$RENDER_API_KEY" ] || { echo "::error::RENDER_API_KEY missing"; exit 1; }
           PROJECT="${{ steps.meta.outputs.project }}"
@@ -239,13 +240,21 @@ jobs:
             "https://api.render.com/v1/services?name=$PROJECT&type=static_site&limit=1" \
             | jq -r '.[0].service.id // empty')"
           if [ -z "$SVCID" ]; then
+            OWNER_ID="${RENDER_OWNER_ID:-}"
+            if [ -z "$OWNER_ID" ]; then
+              OWNER_ID="$(curl -s -m 25 -H "Authorization: Bearer $RENDER_API_KEY" \
+                "https://api.render.com/v1/services?limit=1" \
+                | jq -r '.[0].service.ownerId // .[0].service.owner.id // .[0].ownerId // .[0].owner.id // empty')"
+            fi
+            [ -n "$OWNER_ID" ] || { echo "::error::Render ownerId unavailable; set RENDER_OWNER_ID secret"; exit 1; }
             RESP="$(curl -s -m 40 -X POST -H "Authorization: Bearer $RENDER_API_KEY" \
               -H "Content-Type: application/json" "https://api.render.com/v1/services" -d @- <<JSON
-          {"type":"static_site","name":"$PROJECT",
-           "repo":"$REPO_URL","branch":"main","autoDeploy":"yes",
-           "serviceDetails":{"buildCommand":"","publishPath":"."}}
-          JSON
-          )"
+            {"type":"static_site","name":"$PROJECT",
+             "ownerId":"$OWNER_ID",
+             "repo":"$REPO_URL","branch":"main","autoDeploy":"yes",
+             "serviceDetails":{"buildCommand":"","publishPath":"."}}
+            JSON
+            )"
             SVCID="$(echo "$RESP" | jq -r '(.service.id // .id) // empty')"
             [ -n "$SVCID" ] || { echo "::error::Render create failed: $(echo "$RESP" | head -c 300)"; exit 1; }
           else
